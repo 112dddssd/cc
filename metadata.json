@@ -1,0 +1,5 @@
+{
+  "name": "JLPT Intelligent Reader",
+  "description": "An AI-powered JLPT reading comprehension tool that breaks down articles into sentence-by-sentence translation and vocabulary quizzes with detailed explanations.",
+  "requestFramePermissions": []
+}
