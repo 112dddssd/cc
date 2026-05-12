@@ -17,9 +17,40 @@ export interface QuizItem {
   explanation: string; // Detailed parsing
 }
 
+export interface VocabularyItem {
+  word: string;
+  reading: string;
+  meaning: string;
+}
+
 export interface AnalysisResult {
   title: string;
+  vocabulary: VocabularyItem[];
+  furiganaText: string; // Text with format "漢字(かんじ)"
   questions: QuizItem[];
 }
 
-export type AppState = 'INPUT' | 'LOADING' | 'QUIZ' | 'COMPLETED';
+export interface HistoryRecord {
+  id: string;
+  date: string;
+  title: string;
+  originalText: string;
+  analysis: AnalysisResult;
+}
+
+export interface MistakeRecord {
+  id: string;
+  date: string;
+  articleTitle: string;
+  question: QuizItem;
+  userAnswerIndex?: number;
+}
+
+export interface FavoriteRecord {
+  id: string;
+  date: string;
+  articleTitle: string;
+  question: QuizItem;
+}
+
+export type AppState = 'INPUT' | 'LOADING' | 'QUIZ' | 'COMPLETED' | 'HISTORY' | 'MISTAKES' | 'FAVORITES';

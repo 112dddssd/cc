@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { AnalysisResult, QuestionCategory, QuizItem } from "../types";
 
@@ -9,6 +8,23 @@ const quizSchema: Schema = {
   type: Type.OBJECT,
   properties: {
     title: { type: Type.STRING, description: "A short title for the reading passage" },
+    vocabulary: {
+      type: Type.ARRAY,
+      description: "A list of N1, N2, and N3 level vocabulary words found in the text. EXCLUDE all N4/N5 words.",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          word: { type: Type.STRING, description: "The Kanji word" },
+          reading: { type: Type.STRING, description: "Hiragana reading" },
+          meaning: { type: Type.STRING, description: "Chinese meaning" }
+        },
+        required: ["word", "reading", "meaning"]
+      }
+    },
+    furiganaText: { 
+      type: Type.STRING, 
+      description: "The complete original text where Kanji words are immediately followed by their Hiragana reading in parentheses. E.g., '私(わたし)は日本語(にほんご)を勉強(べんきょう)します'. Do this for almost all Kanji words to help learners." 
+    },
     questions: {
       type: Type.ARRAY,
       items: {
@@ -25,64 +41,69 @@ const quizSchema: Schema = {
             ],
             description: "The type of question."
           },
-          contextText: { type: Type.STRING, description: "The specific Japanese sentence or phrase being quizzed (must match exactly with a part of the original text)." },
-          questionText: { type: Type.STRING, description: "The question prompt." },
+          contextText: { type: Type.STRING, description: "The specific text being quizzed. For VOCAB questions, this MUST be the WORD ONLY. For SENTENCE, it is the sentence." },
+          questionText: { type: Type.STRING, description: "The question prompt. Must be in Chinese unless specified otherwise. STRICTLY NO FURIGANA/READINGS IN PARENTHESES even for Japanese questions." },
           options: {
             type: Type.ARRAY,
             items: { type: Type.STRING },
-            description: "Exactly 4 options."
+            description: "Exactly 4 options. STRICTLY NO FURIGANA/READINGS IN PARENTHESES."
           },
           correctIndex: { type: Type.INTEGER, description: "Index of the correct option (0-3)." },
-          explanation: { type: Type.STRING, description: "Detailed explanation including parsing of the sentence/word and why distractors are wrong (in Chinese)." }
+          explanation: { type: Type.STRING, description: "Detailed explanation in Chinese." }
         },
         required: ["category", "contextText", "questionText", "options", "correctIndex", "explanation"],
         propertyOrdering: ["category", "contextText", "questionText", "options", "correctIndex", "explanation"]
       }
     }
   },
-  required: ["title", "questions"]
+  required: ["title", "vocabulary", "furiganaText", "questions"]
 };
 
 export const generateQuizFromText = async (text: string): Promise<AnalysisResult> => {
   const model = "gemini-2.5-flash";
   
   const prompt = `
-    You are an expert JLPT (Japanese Language Proficiency Test) reading comprehension tutor (N1/N2 Level). 
-    Analyze the provided Japanese text and generate a challenging structured quiz.
+    You are a strict and expert JLPT (Japanese Language Proficiency Test) tutor (N1/N2/N3 Level). 
+    Analyze the provided Japanese text and generate a structured quiz.
 
-    **Goal:** Test deep understanding, nuance, and precise vocabulary usage. Avoid easy questions.
+    **Goal:** Test N3+ vocabulary, Grammar, and Sentence-by-Sentence Comprehension.
 
-    **Process Sequence (Iterate through the text sentence by sentence):**
+    **CRITICAL RULES (STRICT COMPLIANCE REQUIRED):**
+    1.  **NO FURIGANA IN QUIZ QUESTIONS/OPTIONS:** 
+        - **NEVER** include Hiragana readings in parentheses (e.g., "来(く)る", "仕事(しごと)") inside \`questionText\` or \`options\`. 
+        - **This applies strictly to FULL_TEXT_COMPREHENSION questions and options.** 
+        - Write "筆者" NOT "筆者(ひっしゃ)". Write "重要" NOT "重要(じゅうよう)".
+        - Use clean Kanji/Kana only for all quiz content.
+    2.  **DIFFICULTY - N3+ ONLY:** 
+        - Ignore simple N4/N5 words. Focus on N3, N2, N1.
+    3.  **VOCAB LOGIC:**
+        - **Meaning:** Ask for meaning (Chinese options) ONLY if it's a "False Friend" or difficult Katakana/Hiragana.
+        - **Reading:** Ask for readings (Hiragana options) ONLY for difficult Kanji words.
+    4.  **SENTENCE COMPREHENSION (Mandatory):**
+        - You MUST generate a \`SENTENCE_TRANSLATION\` question for **EVERY** sentence in the text.
+        - If the article is long, group short sentences (2-3 max) into one question, but ensure the \`contextText\` is not too long.
+        - **Options:** Chinese (Test accurate translation/nuance).
+    5.  **ORDER OF QUESTIONS (Strict Sequence):**
+        - **First:** All VOCAB and GRAMMAR questions.
+        - **Middle:** All SENTENCE_TRANSLATION questions (in order of text appearance).
+        - **Last:** FULL_TEXT_COMPREHENSION questions (Japanese Options).
+    6.  **ANSWER DISTRIBUTION (CRITICAL):**
+        - **DO NOT** default to Option A (Index 0). 
+        - You **MUST** randomize the position of the correct answer (0, 1, 2, 3) for every question.
+        - **Actively avoid** making A the correct answer too often. Spread correct answers across B, C, and D.
+
+    **Question Types:**
     
-    For EACH sentence in the text:
-    1. **Vocabulary & Grammar (Prioritize Difficult Items):**
-       - **Vocabulary Logic:**
-         * IF the word is Kanji and the meaning is obvious to a Chinese speaker (e.g., '安全', '銀行'): Create a 'VOCAB_READING' question (Options: Hiragana).
-         * IF the word is Kana, Katakana, or the Kanji meaning is different/nuanced in Japanese vs Chinese (e.g., '手紙', '丈夫', '真面目'): Create a 'VOCAB_MEANING' question (Options: Chinese definitions).
-       - **Grammar:** Create 'GRAMMAR_EXPLANATION' questions focusing on **usage and nuance**, not just translation. Explain *why* this grammar point is used here.
-       - **Phrases:** Focus on common Japanese set phrases or idioms. Do not test trivial words in simple contexts.
+    1. **VOCAB_READING**: "请选择该单词的正确读音。" (Options: Hiragana).
+    2. **VOCAB_MEANING**: "请选择该单词/短语的正确含义。" (Options: Chinese).
+    3. **GRAMMAR_EXPLANATION**: "请选择对文中该语法现象最准确的解释。" (Options: Chinese).
+    4. **SENTENCE_TRANSLATION**: "下列哪个选项最能表达这句话在文中的意思？" (Options: Chinese).
+    5. **FULL_TEXT_COMPREHENSION**: Generate 2-3 questions about the main idea. **Question & Options in clean JAPANESE (NO FURIGANA).**
 
-    2. **Sentence Comprehension (Mandatory for key sentences):**
-       - Create a 'SENTENCE_TRANSLATION' question.
-       - **Context:** The full sentence.
-       - **Question:** "Which option best represents the meaning of this sentence?"
-       - **Options (Chinese):**
-          *   **Correct:** Accurate meaning capturing the nuance.
-          *   **Distractors (HARD):** MUST be subtle.
-              - **Logical Traps:** Reverse cause/effect, mix up subject/object.
-              - **Nuance Traps:** Mistake conjecture ("might be") for assertion ("is"), or confuse the author's opinion with a general fact.
-              - **Lexical Traps:** Incorrect interpretation of a polysemous word in this specific context.
-          *   **Constraint:** All options should be roughly the same length and complexity. Do NOT make the correct answer obviously more detailed.
-
-    **After processing all sentences:**
-    3. **Full Text Comprehension:**
-       - Create 2-3 'FULL_TEXT_COMPREHENSION' questions about the main idea, author's stance, or tone.
-       - **Constraint:** **The options for these questions MUST be in JAPANESE (summarized/paraphrased).** Do NOT use Chinese for options here. Do NOT copy exact sentences from the text; paraphrase them.
-
-    **Output Constraints:**
-    - Output must be valid JSON matching the schema.
-    - 'contextText' must be the exact Japanese string from the source text.
-    - Difficulty should be calibrated for N2/N1 learners.
+    **Process:**
+    - Generate Vocab List (N3+).
+    - Generate Furigana Text (Full text with annotations).
+    - Generate Questions Array following the Strict Order.
 
     **Article:**
     ${text}
@@ -95,7 +116,7 @@ export const generateQuizFromText = async (text: string): Promise<AnalysisResult
       config: {
         responseMimeType: "application/json",
         responseSchema: quizSchema,
-        thinkingConfig: { thinkingBudget: 4096 } // Increased budget for harder logic generation
+        thinkingConfig: { thinkingBudget: 4096 }
       },
     });
 
@@ -113,6 +134,8 @@ export const generateQuizFromText = async (text: string): Promise<AnalysisResult
 
     return {
       title: data.title,
+      vocabulary: data.vocabulary || [],
+      furiganaText: data.furiganaText || text,
       questions: questionsWithIds
     };
 
